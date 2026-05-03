@@ -1,0 +1,33 @@
+name: Build Windows x64 single-file
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '7.0.x'
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Publish single-file self-contained
+        run: dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true -p:PublishTrimmed=false -p:SelfContained=true -o ./publish
+
+      - name: Create ZIP
+        run: Compress-Archive -Path publish/* -DestinationPath RobloxLauncher-windows-x64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RobloxLauncher-windows-x64
+          path: RobloxLauncher-windows-x64.zip
