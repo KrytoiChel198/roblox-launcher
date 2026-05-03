@@ -1,10 +1,13 @@
+// name=Program.cs
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace RobloxLauncher
 {
@@ -28,16 +31,17 @@ namespace RobloxLauncher
         private ListBox favoritesList;
         private Button addFavButton;
         private Button removeFavButton;
-        private Button openFolderButton;
+        private Button diagButton;
         private const string AppFolderName = "RobloxLauncher";
         private string FavoritesPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), AppFolderName, "favorites.json");
         private List<string> favorites = new List<string>();
+        private List<string> diag = new List<string>();
 
         public MainForm()
         {
             Text = "Roblox Launcher";
-            Width = 520;
-            Height = 380;
+            Width = 560;
+            Height = 420;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -48,17 +52,17 @@ namespace RobloxLauncher
 
         private void InitializeComponents()
         {
-            var mainPanel = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10), ColumnCount = 2, RowCount = 6 };
+            var mainPanel = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 2, RowCount = 6 };
             mainPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 65));
             mainPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
             for (int i = 0; i < 6; i++) mainPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             var promptLabel = new Label() { Text = "Введите Place ID (только цифры) или полный HTTPS URL игры Roblox:", AutoSize = true, Dock = DockStyle.Fill };
             inputBox = new TextBox() { Dock = DockStyle.Fill, Margin = new Padding(0, 6, 6, 6) };
-            launchButton = new Button() { Text = "Запустить", Width = 110, Height = 32, Dock = DockStyle.Left };
+            launchButton = new Button() { Text = "Запустить", Width = 120, Height = 36, Dock = DockStyle.Left };
             launchButton.Click += LaunchButton_Click;
 
-            statusLabel = new Label() { Text = "", AutoSize = false, Height = 40, Dock = DockStyle.Fill, ForeColor = System.Drawing.Color.DarkGreen };
+            statusLabel = new Label() { Text = "", AutoSize = false, Height = 50, Dock = DockStyle.Fill, ForeColor = System.Drawing.Color.DarkGreen };
 
             favoritesList = new ListBox() { Dock = DockStyle.Fill };
             favoritesList.DoubleClick += FavoritesList_DoubleClick;
@@ -69,8 +73,8 @@ namespace RobloxLauncher
             removeFavButton = new Button() { Text = "Удалить выдел.", Dock = DockStyle.Top };
             removeFavButton.Click += RemoveFavButton_Click;
 
-            openFolderButton = new Button() { Text = "Открыть папку с данными", Dock = DockStyle.Top };
-            openFolderButton.Click += OpenFolderButton_Click;
+            diagButton = new Button() { Text = "Диагностика", Dock = DockStyle.Top };
+            diagButton.Click += DiagButton_Click;
 
             // Layout
             mainPanel.Controls.Add(promptLabel, 0, 0);
@@ -88,17 +92,16 @@ namespace RobloxLauncher
             var favButtonsPanel = new FlowLayoutPanel() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, AutoSize = true };
             favButtonsPanel.Controls.Add(addFavButton);
             favButtonsPanel.Controls.Add(removeFavButton);
-            favButtonsPanel.Controls.Add(openFolderButton);
+            favButtonsPanel.Controls.Add(diagButton);
             mainPanel.Controls.Add(favButtonsPanel, 1, 3);
 
             Controls.Add(mainPanel);
         }
 
-        private void OpenFolderButton_Click(object sender, EventArgs e)
+        private void DiagButton_Click(object sender, EventArgs e)
         {
-            var dir = Path.GetDirectoryName(FavoritesPath) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), AppFolderName);
-            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{dir}\"") { UseShellExecute = true });
+            var diagText = string.Join(Environment.NewLine, diag);
+            MessageBox.Show(string.IsNullOrEmpty(diagText) ? "Диагностики пока нет — попробуйте запустить игру." : diagText, "Диагностика");
         }
 
         private void AddFavButton_Click(object sender, EventArgs e)
@@ -143,6 +146,9 @@ namespace RobloxLauncher
 
         private void Launch(string input)
         {
+            diag.Clear();
+            diag.Add($"Запуск: {input} at {DateTime.Now}");
+
             if (string.IsNullOrEmpty(input))
             {
                 ShowStatus("Ошибка: пустой ввод", true);
@@ -150,7 +156,7 @@ namespace RobloxLauncher
             }
 
             string url;
-            if (System.Text.RegularExpressions.Regex.IsMatch(input, @"^\d+$"))
+            if (Regex.IsMatch(input, @"^\d+$"))
             {
                 url = $"https://www.roblox.com/games/{input}";
             }
@@ -164,98 +170,221 @@ namespace RobloxLauncher
                 return;
             }
 
-            // Try multiple launch methods:
-            // 1) Try registered protocol (roblox-player://...) if available in registry
-            // 2) Try local RobloxPlayerLauncher.exe if found under %LocalAppData%\Roblox\Versions\
-            // 3) Fallback: open https URL in default browser
+            // 1) Try protocol handler from registry
+            var protocolResult = TryLaunchViaRegisteredProtocol(url);
+            if (protocolResult)
+            {
+                ShowStatus("Запущено через протокол Roblox (реестр).");
+                return;
+            }
+
+            // 2) Try local RobloxPlayerLauncher.exe under %LocalAppData%\Roblox\Versions
+            var exeResult = TryLaunchLocalLauncherExe(url);
+            if (exeResult)
+            {
+                ShowStatus("Запущено через локальный RobloxPlayerLauncher.exe.");
+                return;
+            }
+
+            // 3) Fallback
             try
             {
-                // 1) Try protocol handler if registered
-                bool protocolLaunched = TryLaunchProtocol(url);
-                if (protocolLaunched)
-                {
-                    ShowStatus("Запущено через зарегистрированный протокол Roblox (если он есть).");
-                    return;
-                }
-
-                // 2) Try local launcher exe
-                bool exeLaunched = TryLaunchLocalExe(url);
-                if (exeLaunched)
-                {
-                    ShowStatus("Запущено через локальный RobloxPlayerLauncher.exe.");
-                    return;
-                }
-
-                // 3) Fallback to browser
                 Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
                 ShowStatus("Открыто в браузере (fallback). Roblox Player должен запуститься автоматически.");
+                diag.Add("Fallback: browser open executed.");
             }
             catch (Exception ex)
             {
-                ShowStatus("Не удалось запустить: " + ex.Message, true);
+                ShowStatus("Не удалось открыть URL: " + ex.Message, true);
+                diag.Add("Fallback failed: " + ex.ToString());
             }
         }
 
-        private bool TryLaunchProtocol(string url)
+        private bool TryLaunchViaRegisteredProtocol(string url)
         {
-            // Check whether a protocol like "roblox-player" or "roblox" is registered in HKCR
-            try
+            // проверяем несколько стандартных имён протоколов
+            var protocols = new[] { "roblox-player", "roblox", "rbx" };
+            foreach (var proto in protocols)
             {
-                // We will attempt a few plausible protocol URIs, but these may vary by system.
-                // Try list (in order): roblox-player://, roblox://, rbx://
-                var attempts = new[]
+                var command = ReadProtocolCommandFromRegistry(proto);
+                if (string.IsNullOrEmpty(command))
                 {
-                    $"roblox-player://{Uri.EscapeDataString(url)}",
-                    $"roblox://{Uri.EscapeDataString(url)}",
-                    $"rbx://{Uri.EscapeDataString(url)}"
-                };
+                    diag.Add($"Protocol '{proto}' не найден в реестре.");
+                    continue;
+                }
 
-                foreach (var uri in attempts)
+                diag.Add($"Protocol '{proto}' command from registry: {command}");
+
+                var exe = ExtractExePathFromCommand(command);
+                if (exe == null)
                 {
-                    try
-                    {
-                        Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
-                        // If no exception thrown, assume it worked.
-                        return true;
-                    }
-                    catch
-                    {
-                        // ignore and try next
-                    }
+                    diag.Add($"Не удалось извлечь путь к exe из строки: {command}");
+                    continue;
+                }
+
+                if (!File.Exists(exe))
+                {
+                    diag.Add($"Exe из реестра не найден: {exe}");
+                    continue;
+                }
+
+                // Подготавливаем аргументы: если в command есть %1, заменяем, иначе добавляем URL в конец
+                string args = "";
+                if (command.Contains("%1"))
+                {
+                    // Иногда команда формата: "C:\...\RobloxPlayerLauncher.exe" "%1"
+                    // Мы передадим значение, заменив %1 на url
+                    args = command.Substring(command.IndexOf(exe) + exe.Length).Trim();
+                    args = args.Replace("%1", $"\"{url}\"");
+                    // Уберём лишние кавычки вокруг exe (они уже отделены)
+                    // Но при ProcessStart укажем exe в FileName и args в Arguments
+                    args = TrimSurrounding(args);
+                }
+                else
+                {
+                    // нет %1 — просто передадим URL как аргумент
+                    args = $"\"{url}\"";
+                }
+
+                try
+                {
+                    diag.Add($"Запуск exe '{exe}' с аргументами: {args}");
+                    Process.Start(new ProcessStartInfo(exe, args) { UseShellExecute = true });
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    diag.Add($"Запуск exe из реестра не удался: {ex.Message}");
+                    continue;
                 }
             }
-            catch
-            {
-                // ignore overall failures
-            }
+
             return false;
         }
 
-        private bool TryLaunchLocalExe(string url)
+        private string ReadProtocolCommandFromRegistry(string protocol)
+        {
+            try
+            {
+                // 1) HKEY_CURRENT_USER\Software\Classes\<protocol>\shell\open\command
+                var keyPaths = new[]
+                {
+                    $@"Software\Classes\{protocol}\shell\open\command",
+                    $@"{protocol}\shell\open\command" // under HKEY_CLASSES_ROOT
+                };
+
+                // Try HKCU first
+                using (var k1 = Registry.CurrentUser.OpenSubKey(keyPaths[0]))
+                {
+                    if (k1 != null)
+                    {
+                        var val = k1.GetValue(null) as string;
+                        if (!string.IsNullOrEmpty(val)) return val;
+                    }
+                }
+
+                // Then HKEY_CLASSES_ROOT
+                using (var k2 = Registry.ClassesRoot.OpenSubKey(keyPaths[1]))
+                {
+                    if (k2 != null)
+                    {
+                        var val = k2.GetValue(null) as string;
+                        if (!string.IsNullOrEmpty(val)) return val;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                diag.Add($"Ошибка чтения реестра для протокола {protocol}: {ex.Message}");
+            }
+
+            return null;
+        }
+
+        private bool TryLaunchLocalLauncherExe(string url)
         {
             try
             {
                 var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
                 var versionsPath = Path.Combine(localAppData, "Roblox", "Versions");
-                if (!Directory.Exists(versionsPath)) return false;
+                diag.Add($"Пытаемся найти Roblox в: {versionsPath}");
+                if (!Directory.Exists(versionsPath))
+                {
+                    diag.Add("Папка Versions не найдена.");
+                    return false;
+                }
 
-                var exePath = Directory.EnumerateFiles(versionsPath, "RobloxPlayerLauncher.exe", SearchOption.AllDirectories).FirstOrDefault();
-                if (exePath == null) return false;
+                // Ищем RobloxPlayerLauncher.exe или RobloxPlayerBeta.exe
+                var candidates = Directory.EnumerateFiles(versionsPath, "*.exe", SearchOption.AllDirectories)
+                    .Where(fn => Path.GetFileName(fn).IndexOf("RobloxPlayer", StringComparison.OrdinalIgnoreCase) >= 0)
+                    .ToList();
 
-                // Many Roblox launchers accept the game URL as an argument — try that.
-                Process.Start(new ProcessStartInfo(exePath, $"\"{url}\"") { UseShellExecute = true });
-                return true;
+                if (!candidates.Any())
+                {
+                    diag.Add("Не найден ни один candidate exe в Versions.");
+                    return false;
+                }
+
+                diag.Add($"Найдено кандидатов: {candidates.Count}");
+                foreach (var c in candidates)
+                {
+                    diag.Add($"Попытка запуска: {c}");
+                    try
+                    {
+                        // Многие локальные лончеры принимают URL как аргумент
+                        Process.Start(new ProcessStartInfo(c, $"\"{url}\"") { UseShellExecute = true });
+                        diag.Add($"Запущено: {c}");
+                        return true;
+                    }
+                    catch (Exception ex)
+                    {
+                        diag.Add($"Не удалось запустить {c}: {ex.Message}");
+                        // пробуем следующий
+                    }
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                return false;
+                diag.Add("Ошибка при поиске локального exe: " + ex.Message);
             }
+
+            return false;
+        }
+
+        private static string ExtractExePathFromCommand(string command)
+        {
+            if (string.IsNullOrEmpty(command)) return null;
+            // Попробуем регулярку, чтобы извлечь первый путь к .exe
+            var m = Regex.Match(command, @"[""']?(?<path>[^""']+?\.exe)[""']?", RegexOptions.IgnoreCase);
+            if (m.Success)
+            {
+                return m.Groups["path"].Value;
+            }
+
+            // как fallback — взять всё до .exe
+            var idx = command.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0)
+            {
+                var substr = command.Substring(0, idx + 4).Trim();
+                // уберём кавычки
+                substr = substr.Trim('"', '\'');
+                return substr;
+            }
+
+            return null;
+        }
+
+        private static string TrimSurrounding(string s)
+        {
+            if (s == null) return "";
+            return s.Trim().Trim('"').Trim();
         }
 
         private void ShowStatus(string text, bool isError = false)
         {
             statusLabel.ForeColor = isError ? System.Drawing.Color.DarkRed : System.Drawing.Color.DarkGreen;
             statusLabel.Text = text;
+            diag.Add("Status: " + text);
         }
 
         private void LoadFavorites()
