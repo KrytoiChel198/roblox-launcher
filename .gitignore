@@ -1,0 +1,49 @@
+# .gitignore для C# (.NET) / Visual Studio / GitHub Actions
+# Размещать в корне репозитория
+
+# Build directories
+bin/
+obj/
+publish/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Rider / JetBrains
+.idea/
+*.DotSettings
+
+# NuGet packages
+*.nupkg
+packages/
+
+# Rider / ReSharper caches
+_ReSharper*/
+*.ReSharper
+*.DotCover
+
+# VS Code
+.vscode/
+
+# Logs, temp files
+*.log
+*.tmp
+*.temp
+tmp/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Archives / output zips (локальные сборки)
+*.zip
+
+# Other editor backups
+*~
+# Lock files
+project.lock.json
